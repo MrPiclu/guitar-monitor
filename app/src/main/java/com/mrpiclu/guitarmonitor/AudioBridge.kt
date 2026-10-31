@@ -66,6 +66,40 @@ class AudioBridge(private val activity: Activity, private val web: WebView) {
         }
         return arr.toString()
     }
+    private val outputTypes = setOf(
+        AudioDeviceInfo.TYPE_BUILTIN_SPEAKER,
+        AudioDeviceInfo.TYPE_WIRED_HEADSET,
+        AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+        AudioDeviceInfo.TYPE_USB_DEVICE,
+        AudioDeviceInfo.TYPE_USB_HEADSET,
+        AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+        AudioDeviceInfo.TYPE_HDMI,
+        AudioDeviceInfo.TYPE_LINE_ANALOG
+    )
+
+    private fun outTypeName(t: Int) = when (t) {
+        AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> "스피커"
+        AudioDeviceInfo.TYPE_USB_DEVICE, AudioDeviceInfo.TYPE_USB_HEADSET -> "USB"
+        AudioDeviceInfo.TYPE_WIRED_HEADSET, AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+        AudioDeviceInfo.TYPE_LINE_ANALOG -> "유선"
+        AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> "블루투스"
+        AudioDeviceInfo.TYPE_HDMI -> "HDMI"
+        else -> "출력"
+    }
+
+    @JavascriptInterface
+    fun listOutputDevices(): String {
+        val arr = JSONArray()
+        for (d in am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)) {
+            if (d.type !in outputTypes) continue
+            arr.put(
+                JSONObject()
+                    .put("id", d.id.toString())
+                    .put("label", "${d.productName} (${outTypeName(d.type)})")
+            )
+        }
+        return arr.toString()
+    }
 
     @JavascriptInterface
     fun start(json: String): String {
@@ -78,10 +112,10 @@ class AudioBridge(private val activity: Activity, private val web: WebView) {
         }
         val o = JSONObject(json)
         val inId = o.optString("deviceId", "").toIntOrNull() ?: 0
-        // 출력은 태블릿 내장 스피커로 고정합니다 (USB 장치로 새지 않게)
+        // 선택한 출력이 없으면 태블릿 내장 스피커로 보냅니다
         val speaker = am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
             .firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
-        val outId = speaker?.id ?: 0
+        val outId = o.optString("outputDeviceId", "").toIntOrNull() ?: (speaker?.id ?: 0)
 
         val rc = NativeAudio.nativeStart(
             inId, outId,

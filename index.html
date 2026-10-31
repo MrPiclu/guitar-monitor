@@ -45,6 +45,7 @@
   #power.on small{color:#3b2a10}
 
   .row{display:flex; flex-direction:column; gap:8px}
+  .row[hidden]{display:none}
   label, .lab{font-size:.85rem; color:var(--dim)}
   .lab{display:flex; justify-content:space-between}
   .lab b{color:var(--ink); font-weight:600; font-variant-numeric:tabular-nums}
@@ -86,6 +87,11 @@
     <label for="device">입력 장치</label>
     <select id="device"><option value="">기본 입력</option></select>
   </div>
+
+  <div class="row" id="outputRow" hidden>
+      <label for="output">출력 장치</label>
+      <select id="output"></select>
+    </div>
 
   <div class="row">
     <div class="lab"><span>볼륨</span><b id="volText">100%</b></div>
@@ -157,8 +163,19 @@ function createWebEngine(){
         .map((d, i) => ({ id:d.deviceId, label:d.label || ('입력 ' + (i + 1)) }));
     }catch(e){ return []; }
   };
+  
+  api.defaultOutputLabel = '기본 출력';
+  api.listOutputDevices = async () => {
+    if (!(window.AudioContext && 'setSinkId' in AudioContext.prototype)) return [];
+    try{
+      const all = await navigator.mediaDevices.enumerateDevices();
+      return all
+        .filter(d => d.kind === 'audiooutput' && d.deviceId !== 'default' && d.deviceId !== 'communications')
+        .map((d, i) => ({ id:d.deviceId, label:d.label || ('출력 ' + (i + 1)) }));
+    }catch(e){ return []; }
+  };
 
-  api.start = async ({ deviceId, volume, mono:m }) => {
+  api.start = async ({ deviceId, outputDeviceId, volume, mono:m }) => {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
       throw new Error('이 브라우저에서는 마이크를 쓸 수 없습니다. HTTPS 주소로 열어 주세요.');
     }
@@ -180,6 +197,10 @@ function createWebEngine(){
     }
 
     ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint:'interactive' });
+    if (outputDeviceId && ctx.setSinkId){
+      try{ await ctx.setSinkId(outputDeviceId); }
+      catch(e){ throw new Error('출력 장치를 바꿀 수 없습니다.'); }
+    }
     src = ctx.createMediaStreamSource(stream);
     gain = ctx.createGain();
     gain.gain.value = volume;
@@ -236,6 +257,8 @@ function createNativeEngine(){
   window.__nativeLevel = (level, clipped) => api.onLevel && api.onLevel(level, !!clipped);
   window.__nativeDevicesChanged = () => api.onDevicesChange && api.onDevicesChange();
   api.listDevices = async () => JSON.parse(n.listDevices());
+  api.defaultOutputLabel = '태블릿 스피커 (기본)';
+  api.listOutputDevices = async () => JSON.parse(n.listOutputDevices());
   api.start = async opts => {
     const r = JSON.parse(n.start(JSON.stringify(opts)));
     if (r.error) throw new Error(r.error);
@@ -258,22 +281,33 @@ const engine = window.AndroidAudio ? createNativeEngine() : createWebEngine();
   const $ = id => document.getElementById(id);
   const power = $('power'), ring = $('ring'), msg = $('msg');
   const device = $('device'), vol = $('vol'), mono = $('mono');
+  const outputSel = $('output'), outputRow = $('outputRow');
   const C = 2 * Math.PI * 110;
   let running = false, wake = null;
 
   const say = t => { msg.textContent = t || ''; };
 
-  async function refreshDevices(){
-    const list = await engine.listDevices();
-    const current = device.value;
-    device.innerHTML = '<option value="">기본 입력</option>';
+  function fillSelect(sel, defaultLabel, list){
+    const current = sel.value;
+    sel.innerHTML = '';
+    const first = document.createElement('option');
+    first.value = '';
+    first.textContent = defaultLabel;
+    sel.appendChild(first);
     list.forEach(d => {
       const o = document.createElement('option');
       o.value = d.id;
       o.textContent = d.label;
-      device.appendChild(o);
+      sel.appendChild(o);
     });
-    if ([...device.options].some(o => o.value === current)) device.value = current;
+    if ([...sel.options].some(o => o.value === current)) sel.value = current;
+  }
+
+  async function refreshDevices(){
+    const [ins, outs] = await Promise.all([engine.listDevices(), engine.listOutputDevices()]);
+    fillSelect(device, '기본 입력', ins);
+    fillSelect(outputSel, engine.defaultOutputLabel, outs);
+    outputRow.hidden = outs.length === 0;
   }
 
   async function holdScreen(){
@@ -285,6 +319,7 @@ const engine = window.AndroidAudio ? createNativeEngine() : createWebEngine();
     try{
       const r = await engine.start({
         deviceId: device.value,
+        outputDeviceId: outputSel.value,
         volume: vol.value / 100,
         mono: mono.checked
       });
@@ -325,6 +360,9 @@ const engine = window.AndroidAudio ? createNativeEngine() : createWebEngine();
   });
   mono.addEventListener('change', () => engine.setMono(mono.checked));
   device.addEventListener('change', async () => {
+    if (running){ await stop(); await start(); }
+  });
+  outputSel.addEventListener('change', async () => {
     if (running){ await stop(); await start(); }
   });
 
