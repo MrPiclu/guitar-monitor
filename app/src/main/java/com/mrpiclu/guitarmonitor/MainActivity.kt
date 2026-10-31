@@ -51,7 +51,15 @@ class MainActivity : Activity() {
             }
         }
 
+        // index.html이 이 이름을 보면 네이티브 엔진을 자동으로 선택합니다
+        web.addJavascriptInterface(AudioBridge(this, web), "AndroidAudio")
+
         setContentView(web)
         web.loadUrl("https://appassets.androidplatform.net/assets/index.html")
+    }
+
+    override fun onDestroy() {
+        NativeAudio.nativeStop()
+        super.onDestroy()
     }
 }

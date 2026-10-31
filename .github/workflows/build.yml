@@ -16,6 +16,10 @@ jobs:
           distribution: temurin
           java-version: 17
 
+      - name: NDK와 CMake 설치
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;26.1.10909125" "cmake;3.22.1"
+
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.9
