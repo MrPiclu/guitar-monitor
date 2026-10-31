@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>기타 모니터</title>
+<style>
+  :root{
+    --bg:#f1ede6; --panel:#e5dfd4; --ink:#1d2230; --dim:#6b7083;
+    --accent:#c4620a; --hot:#c62828; --track:#cfc8ba;
+    color-scheme: light dark;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#171b26; --panel:#212738; --ink:#eef0f6; --dim:#8d96ad;
+      --accent:#ffb23e; --hot:#ff5d5d; --track:#2e3650;
+    }
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%}
+  body{
+    background:var(--bg); color:var(--ink);
+    font-family:system-ui,-apple-system,"Noto Sans KR",sans-serif;
+    display:flex; justify-content:center;
+    padding:env(safe-area-inset-top) 20px env(safe-area-inset-bottom);
+  }
+  main{width:100%; max-width:460px; display:flex; flex-direction:column; gap:22px; padding:28px 0 36px}
+  h1{font-size:1.15rem; font-weight:600; margin:0; letter-spacing:-.01em}
+  .sub{color:var(--dim); font-size:.85rem; margin:4px 0 0; line-height:1.5}
+
+  .dial{position:relative; width:min(78vw,300px); aspect-ratio:1; margin:6px auto 0}
+  .dial svg{position:absolute; inset:0; width:100%; height:100%; transform:rotate(-90deg)}
+  .dial circle{fill:none; stroke-width:14; stroke-linecap:round}
+  .dial .track{stroke:var(--track)}
+  .dial .level{stroke:var(--accent); stroke-dasharray:691.15; stroke-dashoffset:691.15; transition:stroke .12s}
+  .dial .level.hot{stroke:var(--hot)}
+  #power{
+    position:absolute; inset:15%; border-radius:50%; border:0; cursor:pointer;
+    background:var(--panel); color:var(--ink); font:inherit; font-size:1.05rem; font-weight:600;
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px;
+  }
+  #power small{font-weight:400; color:var(--dim); font-size:.78rem}
+  #power:focus-visible, select:focus-visible, input:focus-visible{outline:3px solid var(--accent); outline-offset:3px}
+  #power.on{background:var(--accent); color:#1b1206}
+  #power.on small{color:#3b2a10}
+
+  .row{display:flex; flex-direction:column; gap:8px}
+  label, .lab{font-size:.85rem; color:var(--dim)}
+  .lab{display:flex; justify-content:space-between}
+  .lab b{color:var(--ink); font-weight:600; font-variant-numeric:tabular-nums}
+  select{
+    width:100%; padding:14px 12px; border-radius:12px; border:1px solid var(--track);
+    background:var(--panel); color:var(--ink); font:inherit; font-size:.95rem;
+  }
+  input[type=range]{width:100%; height:36px; accent-color:var(--accent)}
+  .check{display:flex; align-items:center; gap:12px; padding:12px 0; color:var(--ink); font-size:.95rem}
+  .check input{width:22px; height:22px; accent-color:var(--accent)}
+
+  .note{background:var(--panel); border-radius:12px; padding:14px 16px; font-size:.85rem; line-height:1.6; color:var(--dim)}
+  .note strong{color:var(--ink)}
+  #msg{min-height:1.4em; font-size:.85rem; color:var(--hot)}
+  @media (prefers-reduced-motion: reduce){ .dial .level{transition:none} }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>기타 모니터</h1>
+    <p class="sub">입력으로 들어온 소리를 태블릿 스피커로 바로 내보냅니다.</p>
+  </header>
+
+  <div class="dial">
+    <svg viewBox="0 0 240 240" aria-hidden="true">
+      <circle class="track" cx="120" cy="120" r="110"/>
+      <circle class="level" id="ring" cx="120" cy="120" r="110"/>
+    </svg>
+    <button id="power" type="button" aria-pressed="false">
+      <span id="powerLabel">시작</span>
+      <small id="latency">&nbsp;</small>
+    </button>
+  </div>
+
+  <div id="msg" role="status" aria-live="polite"></div>
+
+  <div class="row">
+    <label for="device">입력 장치</label>
+    <select id="device"><option value="">기본 입력</option></select>
+  </div>
+
+  <div class="row">
+    <div class="lab"><span>볼륨</span><b id="volText">100%</b></div>
+    <input id="vol" type="range" min="0" max="200" value="100" aria-label="볼륨">
+  </div>
+
+  <label class="check">
+    <input id="mono" type="checkbox" checked>
+    양쪽 스피커로 모노 출력
+  </label>
+
+  <div class="note">
+    <strong>하울링 주의.</strong> 태블릿 내장 마이크를 입력으로 고르면 스피커 소리가 다시 들어가 삐— 소리가 납니다.
+    헤드폰 앰프의 출력을 연결한 입력 장치를 선택하세요. 볼륨은 낮게 시작하세요.
+  </div>
+</main>
+
+<script>
+/* =====================================================================
+   오디오 엔진 계약 (웹 / 네이티브 공통)
+   ---------------------------------------------------------------------
+   engine.listDevices()            -> Promise<[{id, label}]>
+   engine.start({deviceId, volume, mono})
+                                   -> Promise<{latencyMs}>  (실패 시 Error 던짐)
+   engine.stop()                   -> Promise<void>
+   engine.setVolume(v)             v: 0.0 ~ 2.0
+   engine.setMono(b)               b: true/false
+   engine.onLevel(level, clipped)  level: 0.0 ~ 1.0   (엔진이 호출)
+   engine.onDevicesChange()        장치 목록 변경 시 (엔진이 호출)
+
+   화면(UI)은 아래 engine 객체만 사용합니다. 오디오 구현을 바꿀 때는
+   createWebEngine / createNativeEngine 안쪽만 고치면 됩니다.
+   ===================================================================== */
+
+function createWebEngine(){
+  const api = { onLevel:null, onDevicesChange:null };
+  let ctx, stream, src, gain, comp, analyser, raf, running = false, smooth = 0;
+  let mono = true;
+
+  function applyMono(){
+    if (!gain) return;
+    gain.channelCountMode = 'explicit';
+    gain.channelInterpretation = 'speakers';
+    gain.channelCount = mono ? 1 : 2;
+  }
+
+  function loop(){
+    if (!running) return;
+    const buf = new Float32Array(analyser.fftSize);
+    analyser.getFloatTimeDomainData(buf);
+    let peak = 0, sum = 0;
+    for (let i = 0; i < buf.length; i++){
+      const v = Math.abs(buf[i]);
+      if (v > peak) peak = v;
+      sum += v * v;
+    }
+    const db = 20 * Math.log10(Math.sqrt(sum / buf.length) || 1e-6);
+    const target = Math.min(1, Math.max(0, (db + 60) / 60));
+    smooth = target > smooth ? target : smooth * 0.9 + target * 0.1;
+    if (api.onLevel) api.onLevel(smooth, peak > 0.97);
+    raf = requestAnimationFrame(loop);
+  }
+
+  api.listDevices = async () => {
+    try{
+      const all = await navigator.mediaDevices.enumerateDevices();
+      return all
+        .filter(d => d.kind === 'audioinput' && d.deviceId !== 'default' && d.deviceId !== 'communications')
+        .map((d, i) => ({ id:d.deviceId, label:d.label || ('입력 ' + (i + 1)) }));
+    }catch(e){ return []; }
+  };
+
+  api.start = async ({ deviceId, volume, mono:m }) => {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      throw new Error('이 브라우저에서는 마이크를 쓸 수 없습니다. HTTPS 주소로 열어 주세요.');
+    }
+    mono = m;
+    try{
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio:{
+          deviceId: deviceId ? { exact: deviceId } : undefined,
+          echoCancellation:false,
+          noiseSuppression:false,
+          autoGainControl:false,
+          channelCount:{ ideal:2 }
+        }
+      });
+    }catch(e){
+      throw new Error(e.name === 'NotAllowedError'
+        ? '마이크 권한이 거부됐습니다. 주소창 옆 설정에서 허용해 주세요.'
+        : '입력 장치를 열 수 없습니다: ' + e.name);
+    }
+
+    ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint:'interactive' });
+    src = ctx.createMediaStreamSource(stream);
+    gain = ctx.createGain();
+    gain.gain.value = volume;
+    applyMono();
+
+    // 큰 소리로부터 스피커를 보호하는 리미터
+    comp = ctx.createDynamicsCompressor();
+    comp.threshold.value = -6;
+    comp.knee.value = 0;
+    comp.ratio.value = 20;
+    comp.attack.value = 0.003;
+    comp.release.value = 0.1;
+
+    analyser = ctx.createAnalyser();
+    analyser.fftSize = 1024;
+
+    src.connect(gain);
+    gain.connect(comp);
+    comp.connect(ctx.destination);
+    comp.connect(analyser);
+
+    await ctx.resume();
+    running = true;
+    smooth = 0;
+    loop();
+    return { latencyMs: Math.round(((ctx.baseLatency || 0) + (ctx.outputLatency || 0)) * 1000) };
+  };
+
+  api.stop = async () => {
+    running = false;
+    cancelAnimationFrame(raf);
+    try{ stream && stream.getTracks().forEach(t => t.stop()); }catch(e){}
+    try{ ctx && await ctx.close(); }catch(e){}
+    stream = ctx = src = gain = comp = analyser = null;
+    if (api.onLevel) api.onLevel(0, false);
+  };
+
+  api.setVolume = v => { if (gain) gain.gain.setTargetAtTime(v, ctx.currentTime, 0.02); };
+  api.setMono = b => { mono = b; applyMono(); };
+
+  if (navigator.mediaDevices){
+    navigator.mediaDevices.addEventListener('devicechange', () => api.onDevicesChange && api.onDevicesChange());
+  }
+  return api;
+}
+
+/* 안드로이드 앱(웹뷰)에서 쓸 어댑터 — 4단계에서 Kotlin 쪽을 구현합니다.
+   Kotlin에서 webView.addJavascriptInterface(obj, "AndroidAudio") 로 연결하고,
+   레벨은 webView.evaluateJavascript("__nativeLevel(0.42, false)") 로 보냅니다.
+   메서드는 문자열(JSON)을 주고받습니다. */
+function createNativeEngine(){
+  const n = window.AndroidAudio;
+  const api = { onLevel:null, onDevicesChange:null };
+  window.__nativeLevel = (level, clipped) => api.onLevel && api.onLevel(level, !!clipped);
+  window.__nativeDevicesChanged = () => api.onDevicesChange && api.onDevicesChange();
+  api.listDevices = async () => JSON.parse(n.listDevices());
+  api.start = async opts => {
+    const r = JSON.parse(n.start(JSON.stringify(opts)));
+    if (r.error) throw new Error(r.error);
+    return r;
+  };
+  api.stop = async () => { n.stop(); };
+  api.setVolume = v => n.setVolume(v);
+  api.setMono = b => n.setMono(b);
+  return api;
+}
+
+// 앱에서는 네이티브 엔진, 브라우저에서는 웹 엔진이 자동 선택됩니다.
+const engine = window.AndroidAudio ? createNativeEngine() : createWebEngine();
+
+
+/* =====================================================================
+   화면(UI) — 여기부터는 engine만 사용합니다. 마음껏 고쳐도 됩니다.
+   ===================================================================== */
+(() => {
+  const $ = id => document.getElementById(id);
+  const power = $('power'), ring = $('ring'), msg = $('msg');
+  const device = $('device'), vol = $('vol'), mono = $('mono');
+  const C = 2 * Math.PI * 110;
+  let running = false, wake = null;
+
+  const say = t => { msg.textContent = t || ''; };
+
+  async function refreshDevices(){
+    const list = await engine.listDevices();
+    const current = device.value;
+    device.innerHTML = '<option value="">기본 입력</option>';
+    list.forEach(d => {
+      const o = document.createElement('option');
+      o.value = d.id;
+      o.textContent = d.label;
+      device.appendChild(o);
+    });
+    if ([...device.options].some(o => o.value === current)) device.value = current;
+  }
+
+  async function holdScreen(){
+    try{ if ('wakeLock' in navigator) wake = await navigator.wakeLock.request('screen'); }catch(e){}
+  }
+
+  async function start(){
+    say('');
+    try{
+      const r = await engine.start({
+        deviceId: device.value,
+        volume: vol.value / 100,
+        mono: mono.checked
+      });
+      running = true;
+      power.classList.add('on');
+      power.setAttribute('aria-pressed', 'true');
+      $('powerLabel').textContent = '정지';
+      $('latency').textContent = r.latencyMs ? '지연 약 ' + r.latencyMs + 'ms' : '재생 중';
+      await refreshDevices();
+      await holdScreen();
+    }catch(e){
+      say(e.message);
+    }
+  }
+
+  async function stop(){
+    running = false;
+    await engine.stop();
+    try{ wake && await wake.release(); }catch(e){}
+    wake = null;
+    power.classList.remove('on');
+    power.setAttribute('aria-pressed', 'false');
+    $('powerLabel').textContent = '시작';
+    $('latency').innerHTML = '&nbsp;';
+  }
+
+  engine.onLevel = (level, clipped) => {
+    ring.style.strokeDashoffset = C * (1 - level);
+    ring.classList.toggle('hot', clipped);
+  };
+  engine.onDevicesChange = refreshDevices;
+
+  power.addEventListener('click', () => running ? stop() : start());
+
+  vol.addEventListener('input', () => {
+    $('volText').textContent = vol.value + '%';
+    engine.setVolume(vol.value / 100);
+  });
+  mono.addEventListener('change', () => engine.setMono(mono.checked));
+  device.addEventListener('change', async () => {
+    if (running){ await stop(); await start(); }
+  });
+
+  document.addEventListener('visibilitychange', () => {
+    if (running && document.visibilityState === 'visible') holdScreen();
+  });
+
+  refreshDevices();
+})();
+</script>
+</body>
+</html>
